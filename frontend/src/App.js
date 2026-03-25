@@ -10,13 +10,14 @@ import 'reactflow/dist/style.css';
 import './App.css';
 import { InputNode, ResultNode } from './FlowNodes';
 
-// Tell React Flow which components to use for our custom node types
+
+const API_BASE_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
+
 const nodeTypes = {
   inputNode: InputNode,
   resultNode: ResultNode,
 };
 
-// How far apart each new pair of nodes appears vertically on the canvas
 const VERTICAL_GAP = 280;
 
 function createNodePair(id, position) {
@@ -57,36 +58,26 @@ function createNodePair(id, position) {
 }
 
 export default function App() {
-  // Tracks how many pairs have been created so we always get a unique ID
   const totalPairs = useRef(1);
-
-  // Controls whether dark or light theme is active (dark by default)
   const [isDarkMode, setIsDarkMode] = useState(true);
-
-  // Stores the typed prompt for each pair, keyed by pair ID
   const [prompts, setPrompts] = useState({ 1: '' });
-
   const [toast, setToast] = useState(null);
   const [history, setHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
-  // Start with one pair already on the canvas
   const { inputNode, resultNode, edge } = createNodePair(1, { x: 60, y: 60 });
   const [nodes, setNodes, onNodesChange] = useNodesState([inputNode, resultNode]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([edge]);
 
-  // Show a small notification at the bottom of the screen
   const showToast = (message, type = 'success') => {
     setToast({ msg: message, type });
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Add a brand new prompt/response pair below the existing ones
   const addNewPair = useCallback(() => {
     totalPairs.current += 1;
     const newId = totalPairs.current;
     const yPosition = (newId - 1) * VERTICAL_GAP;
-
     const { inputNode, resultNode, edge } = createNodePair(newId, { x: 60, y: yPosition });
 
     setPrompts(prev => ({ ...prev, [newId]: '' }));
@@ -94,34 +85,26 @@ export default function App() {
     setEdges(existing => [...existing, edge]);
   }, [setNodes, setEdges]);
 
-  // Send the prompt to our backend and show the AI response in the result node
   const runPair = useCallback(async (pairId) => {
     const userPrompt = prompts[pairId] || '';
+    if (!userPrompt.trim()) return showToast('Please enter a prompt first!', 'error');
 
-    if (!userPrompt.trim()) {
-      return showToast('Please enter a prompt first!', 'error');
-    }
-
-    // Show loading spinner while waiting for the response
     setNodes(all =>
       all.map(node =>
-        node.id === `result-${pairId}`
-          ? { ...node, data: { value: '', loading: true } }
-          : node
+        node.id === `result-${pairId}` ? { ...node, data: { value: '', loading: true } } : node
       )
     );
 
     try {
-      const res = await fetch('/api/ask-ai', {
+      const res = await fetch(`${API_BASE_URL}/api/ask-ai`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: userPrompt }),
       });
 
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error || 'Server error');
 
-      //AI's answer
       setNodes(all =>
         all.map(node =>
           node.id === `result-${pairId}`
@@ -130,46 +113,41 @@ export default function App() {
         )
       );
     } catch (err) {
-      showToast(err.message || 'Something went wrong', 'error');
+      showToast(err.message, 'error');
       setNodes(all =>
         all.map(node =>
-          node.id === `result-${pairId}`
-            ? { ...node, data: { value: '', loading: false } }
-            : node
+          node.id === `result-${pairId}` ? { ...node, data: { value: '', loading: false } } : node
         )
       );
     }
   }, [prompts, setNodes]);
 
-  // Save a prompt and its response to MongoDB
   const savePair = useCallback(async (pairId) => {
     const userPrompt = prompts[pairId] || '';
     const resultNode = nodes.find(n => n.id === `result-${pairId}`);
     const aiResponse = resultNode?.data?.value || '';
 
-    if (!userPrompt || !aiResponse) {
-      return showToast('Run the flow first before saving!', 'error');
-    }
+    if (!userPrompt || !aiResponse) return showToast('Run the flow first before saving!', 'error');
 
     try {
-      const res = await fetch('/api/save', {
+      const res = await fetch(`${API_BASE_URL}/api/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: userPrompt, response: aiResponse }),
       });
 
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error);
       showToast('Saved to MongoDB! ✓');
     } catch (err) {
-      showToast(err.message || 'Save failed', 'error');
+      showToast(err.message, 'error');
     }
   }, [prompts, nodes]);
 
-  //Load saved flows
   const loadHistory = async () => {
     try {
-      const res = await fetch('/api/history');
+      const res = await fetch(`${API_BASE_URL}/api/history`);
+      if (!res.ok) throw new Error();
       const data = await res.json();
       setHistory(data);
       setShowHistory(true);
@@ -178,11 +156,9 @@ export default function App() {
     }
   };
 
-
   const nodesWithCallbacks = nodes.map(node => {
     const match = node.id.match(/^input-(\d+)$/);
-    if (!match) return node; // result nodes don't need callbacks
-
+    if (!match) return node;
     const pairId = parseInt(match[1]);
 
     return {
@@ -194,9 +170,7 @@ export default function App() {
           setPrompts(prev => ({ ...prev, [pairId]: newValue }));
           setNodes(all =>
             all.map(n =>
-              n.id === `input-${pairId}`
-                ? { ...n, data: { ...n.data, value: newValue } }
-                : n
+              n.id === `input-${pairId}` ? { ...n, data: { ...n.data, value: newValue } } : n
             )
           );
         },
@@ -209,7 +183,6 @@ export default function App() {
 
   return (
     <div className={`app-wrapper ${isDarkMode ? '' : 'light'}`}>
-
       <header className="app-header">
         <div className="header-left">
           <div className="logo">
@@ -221,7 +194,6 @@ export default function App() {
         <div className="header-actions">
           <button className="btn btn-ghost" onClick={loadHistory}>History</button>
           <button className="btn btn-add" onClick={addNewPair}>+ Add Node</button>
-          {/*Toggle*/}
           <button
             className="btn btn-theme"
             onClick={() => setIsDarkMode(prev => !prev)}
@@ -258,10 +230,7 @@ export default function App() {
         </ReactFlow>
       </div>
 
-      {/*Toast notification*/}
-      {toast && (
-        <div className={`toast ${toast.type}`}>{toast.msg}</div>
-      )}
+      {toast && <div className={`toast ${toast.type}`}>{toast.msg}</div>}
 
       {showHistory && (
         <div className="history-overlay" onClick={() => setShowHistory(false)}>
@@ -270,7 +239,6 @@ export default function App() {
               <h2>Saved Flows</h2>
               <button className="close-btn" onClick={() => setShowHistory(false)}>✕</button>
             </div>
-
             {history.length === 0 ? (
               <p className="empty-history">No saved flows yet.</p>
             ) : (
@@ -278,12 +246,8 @@ export default function App() {
                 {history.map(item => (
                   <div key={item._id} className="history-item">
                     <div className="history-prompt">Q: {item.prompt}</div>
-                    <div className="history-response">
-                      A: {item.response.substring(0, 100)}...
-                    </div>
-                    <div className="history-date">
-                      {new Date(item.createdAt).toLocaleString()}
-                    </div>
+                    <div className="history-response">A: {item.response.substring(0, 100)}...</div>
+                    <div className="history-date">{new Date(item.createdAt).toLocaleString()}</div>
                   </div>
                 ))}
               </div>
@@ -291,7 +255,6 @@ export default function App() {
           </div>
         </div>
       )}
-
     </div>
   );
 }
